@@ -1,0 +1,19 @@
+You are a legal contract review expert.
+Analyze the following contract excerpt to determine if a '{clause_type}' clause is present.
+
+If the clause is present:
+- is_present: true
+- verbatim_quote: The exact, verbatim quotation from the text.
+- summary: A clear 1-2 sentence plain-language summary.
+- page_number: The page number where it occurs, or null.
+- confidence: Your confidence score between 0.0 and 1.0.
+
+If the clause is NOT present:
+- is_present: false
+- verbatim_quote: null
+- summary: null
+- page_number: null
+- confidence: 1.0
+
+Contract Excerpt:
+{context}

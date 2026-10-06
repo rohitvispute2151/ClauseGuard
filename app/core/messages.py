@@ -1,0 +1,16 @@
+# Canonical user-facing messages — no hardcoded strings in services or routes
+
+MSG_DOC_QUEUED = "Document queued for ingestion."
+MSG_DOC_ALREADY_EXISTS = "Document with identical content already ingested."
+MSG_DOC_NOT_FOUND = "Document not found."
+MSG_DOC_NOT_READY = "Document ingestion is not yet complete."
+MSG_EXTRACTION_NOT_FOUND = "Extraction record not found."
+MSG_EXTRACTION_FAILED = "Extraction failed after all retry attempts."
+MSG_NOT_FOUND_IN_DOCUMENT = "The requested information was not found in the document."
+MSG_CITATION_UNVERIFIED = "Citation could not be verified against the source text."
+MSG_RATE_LIMIT_EXCEEDED = "Rate limit exceeded. Please retry after {retry_after}s."
+MSG_INVALID_API_KEY = "Invalid or missing API key."
+MSG_INVALID_FILE_TYPE = "Only PDF files (.pdf) are supported."
+MSG_FILE_TOO_LARGE = "File exceeds maximum allowed size of {max_mb} MB."
+MSG_CIRCUIT_OPEN = "LLM provider circuit is currently open due to upstream errors."
+MSG_PROVIDER_FAILURE = "All LLM providers failed to process the request."
