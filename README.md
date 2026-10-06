@@ -1,41 +1,60 @@
 # ClauseGuard — Contract Review API
 
-ClauseGuard is a production-grade contract review API designed to analyze legal and procurement agreements, extract risky clauses with structured schemas and verbatim citations, and answer questions via streaming (SSE).
+ClauseGuard is a production-grade contract review and intelligence API designed to analyze legal and procurement agreements, extract risky clauses with structured schemas and verbatim citations, and answer queries via Server-Sent Events (SSE) streaming.
 
-Answers cite exact source text and are programmatically verified. Built with an evaluation harness from Day 1 to ensure zero hallucination and continuous regression testing.
+Every answer and extraction is grounded with verified source text and tested with an evaluation harness from Day 1 to ensure zero hallucination and continuous regression safety.
 
 ---
 
 ## FreeLLM Providers Configuration
 
-Instead of proprietary paid APIs (AWS Bedrock / OpenAI), ClauseGuard is configured with the best free-tier providers from **[FreeLLM.net](https://freellm.net/)**:
+ClauseGuard is built to run entirely on high-performance free-tier providers from **[FreeLLM.net](https://freellm.net/)** with automatic resilience and failover:
 
-| Role | Provider | Model | Free Tier Limits (FreeLLM.net) | Features |
+| Role | Provider | Model ID | Tier Limits (FreeLLM.net) | Capabilities |
 |---|---|---|---|---|
-| **Primary** | **Google Gemini** (Google AI Studio) | `gemini-2.5-flash` | 15 RPM / 1,500 RPD | 1M token context window, JSON schema mode, free tier without credit card |
-| **Fallback** | **Groq** | `llama-3.3-70b-versatile` | 20 RPM / 2,000 RPD | Ultra-low latency LPU inference (~2,000 tok/s), OpenAI compatible, no credit card |
+| **Primary** | **Google Gemini** (Google AI Studio) | `gemini-flash-lite-latest` | 15 RPM / 1,500 RPD | 1M token context window, structured JSON mode, zero-cost development tier |
+| **Fallback** | **Groq** | `openai/gpt-oss-120b` *(or `llama-3.3-70b-versatile`)* | 30 RPM / 1,000+ RPD | Ultra-low latency LPU inference, OpenAI-compatible format, zero-cost development tier |
 
-### Setting Up API Keys
+### Setting Up API Credentials
 
 1. **Google Gemini (Primary)**:
-   - Sign up at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)
+   - Generate your free API key at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey).
    - Add to `.env`: `GEMINI_API_KEY=your_key_here`
 2. **Groq (Fallback)**:
-   - Sign up at [console.groq.com/keys](https://console.groq.com/keys)
+   - Generate your free API key at [console.groq.com/keys](https://console.groq.com/keys).
    - Add to `.env`: `GROQ_API_KEY=your_key_here`
+3. **Langfuse (Observability - Optional / Cloud)**:
+   - Sign up at [cloud.langfuse.com](https://cloud.langfuse.com) (or Japan region `jp.cloud.langfuse.com`).
+   - Add credentials to `.env`:
+     ```env
+     LANGFUSE_HOST=https://jp.cloud.langfuse.com
+     LANGFUSE_PUBLIC_KEY=pk-lf-your_public_key
+     LANGFUSE_SECRET_KEY=sk-lf-your_secret_key
+     ```
 
 ---
 
 ## Core Architecture
 
-Following the layered FastAPI architecture:
-- **Routes** (`app/api/v1/routes/`): Request validation via Pydantic, HTTP responses only.
-- **Services** (`app/services/`): Pure business logic, AI orchestration, citation verification.
-- **Repositories** (`app/repositories/`): SQLAlchemy 2.0 query layer extending `BaseRepository`.
-- **Models** (`app/models/`): SQLAlchemy ORM with `Mapped`/`mapped_column` syntax and pgvector integration.
-- **Pipeline & Retrieval** (`app/pipeline/`, `app/retrieval/`): Layout-aware PDF parser, section detector, chunker, hybrid search with Reciprocal Rank Fusion (RRF), citation verifier, repair loop.
-- **Resilience** (`app/llm/resilience/`): Exponential backoff with jitter, three-state circuit breaker (CLOSED/OPEN/HALF-OPEN), token-bucket rate limiter.
-- **Observability** (`app/observability/`): Prometheus metrics (`/metrics`), Langfuse trace instrumentation, per-request token and cost ledger.
+ClauseGuard follows a strict layered FastAPI architecture:
+
+```text
+clauseguard/
+├── app/
+│   ├── api/v1/routes/        # Request validation (Pydantic), HTTP responses & SSE only
+│   ├── services/             # Pure business logic, AI orchestration, citation verification
+│   ├── repositories/         # SQLAlchemy 2.0 query layer extending BaseRepository
+│   ├── models/               # SQLAlchemy ORM (Mapped/mapped_column) with pgvector
+│   ├── pipeline/             # PDF parser, section detector, chunker, repair loop, citation verifier
+│   ├── retrieval/            # Hybrid search with Reciprocal Rank Fusion (RRF) & embeddings
+│   ├── llm/                  # Providers (Gemini & Groq), cost tracker, token pricing
+│   │   └── resilience/       # Exponential backoff, 3-state CircuitBreaker, token-bucket RateLimiter
+│   ├── observability/        # Prometheus metrics (/metrics), Langfuse v4 tracing, run ledger
+│   └── workers/              # Celery background tasks for async document ingestion
+├── eval/                     # CUAD golden samples & hallucination eval harness
+├── migrations/               # Alembic versioned database migrations
+└── tests/                    # Comprehensive unit tests
+```
 
 ---
 
@@ -43,48 +62,112 @@ Following the layered FastAPI architecture:
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/v1/health` | Service health status and active FreeLLM providers |
-| `POST` | `/api/v1/documents` | Upload contract PDF for layout-aware parsing and chunking |
-| `GET` | `/api/v1/documents/{id}` | Ingestion status and chunk counts |
-| `POST` | `/api/v1/extract` | Structured clause extraction (parallelized with concurrency cap) |
-| `GET` | `/api/v1/extractions/{id}` | Retrieve historical extraction with verified citations |
-| `POST` | `/api/v1/ask` | Grounded contract Q&A with Server-Sent Events (SSE) streaming |
+| `GET` | `/api/v1/health` | Health check & active FreeLLM provider status |
+| `POST` | `/api/v1/documents` | Upload contract PDF for asynchronous parsing, chunking & vector embedding |
+| `GET` | `/api/v1/documents/{id}` | Check ingestion status and total parsed chunk count |
+| `POST` | `/api/v1/extract` | Structured clause extraction (parallelized with concurrency cap & repair loop) |
+| `GET` | `/api/v1/extractions/{id}` | Fetch historical extraction results with verified citations |
+| `POST` | `/api/v1/ask` | Grounded contract Q&A streaming via Server-Sent Events (SSE) with verified citations |
 | `GET` | `/metrics` | Prometheus metrics scrape endpoint |
 
 ---
 
-## Running the Application
+## Quickstart & Local Development
 
-### 1. Local Development
+### 1. Environment Configuration
+
+Clone the repository and copy the environment template:
 
 ```bash
-# Activate virtual environment
-source .venv/bin/activate
-
-# Start API server with reload
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+cp .env.example .env
 ```
 
-Visit the interactive OpenAPI docs: `http://localhost:8000/docs`
+Ensure your `.env` contains your `GEMINI_API_KEY` and database credentials:
 
-### 2. Docker Compose (Full Stack)
+```env
+DATABASE_URL=postgresql+asyncpg://clauseguard:clauseguard_secret@localhost:5433/clauseguard
+DATABASE_SYNC_URL=postgresql+psycopg2://clauseguard:clauseguard_secret@localhost:5433/clauseguard
+REDIS_URL=redis://localhost:6379/0
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL_ID=gemini-flash-lite-latest
+GROQ_API_KEY=your_groq_api_key_here
+GROQ_MODEL_ID=openai/gpt-oss-120b
+```
+
+### 2. Start PostgreSQL & Redis
+
+Start the containerized `pgvector` database and Redis broker:
+
+```bash
+make db-up
+# Alternatively: docker compose up -d postgres redis
+```
+
+Run database migrations:
+
+```bash
+make migrate
+# Alternatively: .venv/bin/alembic upgrade head
+```
+
+### 3. Start the Celery Worker
+
+In a dedicated terminal tab, start the Celery worker for background ingestion:
+
+```bash
+make worker
+# Alternatively: .venv/bin/celery -A app.workers.celery_app worker --loglevel=info --pool=solo
+```
+
+> **Note for macOS / Apple Silicon:** The worker is configured with `--pool=solo` to prevent billiard multiprocessing spawn incompatibilities on macOS.
+
+### 4. Start the FastAPI API Server
+
+In another terminal tab, start the Uvicorn development server:
+
+```bash
+make server
+# Alternatively: .venv/bin/uvicorn app.main:app --port 8000 --reload
+```
+
+Interactive Swagger documentation is available at: **`http://localhost:8000/docs`**
+
+---
+
+## Developer Command Reference (`Makefile`)
+
+| Command | Action |
+|---|---|
+| `make db-up` | Starts Postgres (with pgvector) and Redis containers |
+| `make db-down` | Stops and removes local Docker containers |
+| `make migrate` | Applies pending Alembic database migrations |
+| `make migrate-check` | Displays current migration revision |
+| `make server` | Starts Uvicorn development server on port `8000` |
+| `make worker` | Starts Celery ingestion worker (solo pool) |
+| `make test` | Runs the entire unit test and eval suite |
+
+---
+
+## Full Stack Docker Compose
+
+To boot all services (API, Celery Worker, Postgres, Redis, Prometheus) in containers:
 
 ```bash
 docker compose up --build -d
 ```
 
-This boots:
-- FastAPI API server on `http://localhost:8000`
-- Celery worker for background PDF ingestion
-- PostgreSQL 16 with pgvector extension on `5432`
-- Redis on `6379`
-- Prometheus on `http://localhost:9090`
+- **API Server:** `http://localhost:8000`
+- **Prometheus Dashboard:** `http://localhost:9090`
+- **Postgres (pgvector):** `localhost:5432` *(in Docker network)*
+- **Redis Broker:** `localhost:6379`
 
 ---
 
 ## Running Tests & Evaluation Harness
 
+ClauseGuard includes an automated evaluation suite testing extraction recall, citation groundedness, and prompt injection defense against golden CUAD contract samples:
+
 ```bash
-# Run unit tests and golden set evals
-pytest tests/ eval/ -v
+make test
+# or: pytest tests/ eval/ -v
 ```
