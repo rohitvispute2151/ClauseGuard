@@ -1,0 +1,26 @@
+{
+    "root": [
+        "./src/env.d.ts",
+        "./src/main.ts",
+        "./src/composables/useaskstream.ts",
+        "./src/composables/usedocument.ts",
+        "./src/composables/useextraction.ts",
+        "./src/composables/usehealth.ts",
+        "./src/router/index.ts",
+        "./src/services/api.ts",
+        "./src/types/api.ts",
+        "./src/app.vue",
+        "./src/components/common/documentselector.vue",
+        "./src/components/common/header.vue",
+        "./src/components/extraction/clausecard.vue",
+        "./src/components/extraction/extractionview.vue",
+        "./src/components/qa/citationcard.vue",
+        "./src/components/qa/questionview.vue",
+        "./src/components/upload/documentupload.vue",
+        "./src/views/askview.vue",
+        "./src/views/dashboardview.vue",
+        "./src/views/extractionsview.vue",
+        "./src/views/uploadview.vue"
+    ],
+    "version": "5.9.3"
+}

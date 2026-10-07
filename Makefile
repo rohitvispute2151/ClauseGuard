@@ -35,3 +35,12 @@ test:
 
 worker:
 	$(VENV)/celery -A app.workers.celery_app worker --loglevel=info --pool=solo
+
+frontend-install:
+	cd frontend && bun install
+
+frontend:
+	cd frontend && bun run dev
+
+frontend-build:
+	cd frontend && bun run build
