@@ -36,11 +36,11 @@ ClauseGuard is built to run entirely on high-performance free-tier providers fro
 
 ## Core Architecture
 
-ClauseGuard follows a strict layered FastAPI architecture:
+ClauseGuard follows a strict layered architecture with a FastAPI backend and a dedicated Vue 3 + Bun frontend:
 
 ```text
 clauseguard/
-├── app/
+├── app/                    # Layered FastAPI backend
 │   ├── api/v1/routes/        # Request validation (Pydantic), HTTP responses & SSE only
 │   ├── services/             # Pure business logic, AI orchestration, citation verification
 │   ├── repositories/         # SQLAlchemy 2.0 query layer extending BaseRepository
@@ -51,6 +51,17 @@ clauseguard/
 │   │   └── resilience/       # Exponential backoff, 3-state CircuitBreaker, token-bucket RateLimiter
 │   ├── observability/        # Prometheus metrics (/metrics), Langfuse v4 tracing, run ledger
 │   └── workers/              # Celery background tasks for async document ingestion
+├── frontend/               # Dedicated Vue 3 + Bun + TypeScript frontend
+│   ├── src/
+│   │   ├── components/       # DocumentUpload, ExtractionView, ClauseCard, QuestionView, Citations
+│   │   ├── views/            # DashboardView, UploadView, ExtractionsView, AskView
+│   │   ├── composables/      # useDocument, useExtraction, useAskStream, useHealth
+│   │   ├── services/         # Typed API & SSE streaming client
+│   │   ├── types/            # TypeScript schemas matching FastAPI contracts
+│   │   ├── router/           # Vue Router 4 navigation
+│   │   └── assets/           # Obsidian dark mode design system & styles
+│   ├── bun.lock              # Bun lockfile
+│   └── vite.config.ts        # Vite configuration with backend proxy
 ├── eval/                     # CUAD golden samples & hallucination eval harness
 ├── migrations/               # Alembic versioned database migrations
 └── tests/                    # Comprehensive unit tests
@@ -69,6 +80,27 @@ clauseguard/
 | `GET` | `/api/v1/extractions/{id}` | Fetch historical extraction results with verified citations |
 | `POST` | `/api/v1/ask` | Grounded contract Q&A streaming via Server-Sent Events (SSE) with verified citations |
 | `GET` | `/metrics` | Prometheus metrics scrape endpoint |
+
+---
+
+## Frontend Web Application
+
+ClauseGuard includes a clean, production-grade web application in [`frontend/`](file:///Users/ztlab121/Desktop/apps/generative_ai/clauseguard/frontend) built with **Vue 3**, **Bun.js**, and **TypeScript**:
+
+- **Contract Ingestion Dropzone**:
+  - PDF drag-and-drop with client-side 50MB and format validation.
+  - Live ingestion pipeline stage tracking (`Upload` ➔ `Parsing & Sections` ➔ `Vector Chunks`).
+  - SHA-256 deduplication and local persistence of recent contracts.
+- **Structured Clause Extraction**:
+  - Interactive selector chips for all 10 standard clauses with prompt template versioning (`v2` vs `v1`).
+  - Grounding tags, confidence score meters, verbatim citations, and self-healing repair loop indicators.
+  - Performance telemetry strip (latency, token usage, cost in $USD).
+- **Grounded Q&A (SSE Streaming)**:
+  - Token-by-token Server-Sent Events (SSE) streaming answers with real-time Markdown rendering.
+  - Grounded citation cards linking quotes to verified source chunks and page numbers.
+  - Suggested prompt shortcuts for rapid clause auditing.
+- **System Health & Observability**:
+  - Live backend connectivity and dual-provider failover status (Gemini Flash Lite & Groq).
 
 ---
 
@@ -132,6 +164,18 @@ make server
 
 Interactive Swagger documentation is available at: **`http://localhost:8000/docs`**
 
+### 5. Start the Vue 3 Frontend
+
+In a dedicated terminal tab, install dependencies and start the frontend development server:
+
+```bash
+make frontend-install
+make frontend
+# Alternatively: cd frontend && bun install && bun run dev
+```
+
+The web interface is available at: **`http://localhost:5173`**
+
 ---
 
 ## Developer Command Reference (`Makefile`)
@@ -144,6 +188,9 @@ Interactive Swagger documentation is available at: **`http://localhost:8000/docs
 | `make migrate-check` | Displays current migration revision |
 | `make server` | Starts Uvicorn development server on port `8000` |
 | `make worker` | Starts Celery ingestion worker (solo pool) |
+| `make frontend-install` | Installs frontend dependencies with Bun |
+| `make frontend` | Starts Vite development server for Vue frontend on port `5173` |
+| `make frontend-build` | Type-checks (`vue-tsc`) and builds production frontend bundle |
 | `make test` | Runs the entire unit test and eval suite |
 
 ---
