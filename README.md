@@ -1,220 +1,169 @@
-# ClauseGuard — Contract Review API
+# ClauseGuard
 
-ClauseGuard is a production-grade contract review and intelligence API designed to analyze legal and procurement agreements, extract risky clauses with structured schemas and verbatim citations, and answer queries via Server-Sent Events (SSE) streaming.
+**Contract review you can verify.** ClauseGuard ingests contract PDFs, extracts the clauses that matter into structured JSON, and answers questions over streaming SSE. Every quote it returns is checked against the source text by code, and anything that can't be matched is marked ungrounded instead of being presented as fact.
 
-Every answer and extraction is grounded with verified source text and tested with an evaluation harness from Day 1 to ensure zero hallucination and continuous regression safety.
-
----
-
-## FreeLLM Providers Configuration
-
-ClauseGuard is built to run entirely on high-performance free-tier providers from **[FreeLLM.net](https://freellm.net/)** with automatic resilience and failover:
-
-| Role | Provider | Model ID | Tier Limits (FreeLLM.net) | Capabilities |
-|---|---|---|---|---|
-| **Primary** | **Google Gemini** (Google AI Studio) | `gemini-flash-lite-latest` | 15 RPM / 1,500 RPD | 1M token context window, structured JSON mode, zero-cost development tier |
-| **Fallback** | **Groq** | `openai/gpt-oss-120b` *(or `llama-3.3-70b-versatile`)* | 30 RPM / 1,000+ RPD | Ultra-low latency LPU inference, OpenAI-compatible format, zero-cost development tier |
-
-### Setting Up API Credentials
-
-1. **Google Gemini (Primary)**:
-   - Generate your free API key at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey).
-   - Add to `.env`: `GEMINI_API_KEY=your_key_here`
-2. **Groq (Fallback)**:
-   - Generate your free API key at [console.groq.com/keys](https://console.groq.com/keys).
-   - Add to `.env`: `GROQ_API_KEY=your_key_here`
-3. **Langfuse (Observability - Optional / Cloud)**:
-   - Sign up at [cloud.langfuse.com](https://cloud.langfuse.com) (or Japan region `jp.cloud.langfuse.com`).
-   - Add credentials to `.env`:
-     ```env
-     LANGFUSE_HOST=https://jp.cloud.langfuse.com
-     LANGFUSE_PUBLIC_KEY=pk-lf-your_public_key
-     LANGFUSE_SECRET_KEY=sk-lf-your_secret_key
-     ```
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-async-009688?logo=fastapi&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-pgvector-4169E1?logo=postgresql&logoColor=white)
+![Vue](https://img.shields.io/badge/Vue-3%20%2B%20TypeScript-42B883?logo=vuedotjs&logoColor=white)
+![Tests](https://img.shields.io/badge/tests-26%20passing-2EA44F)
 
 ---
 
-## Core Architecture
+## Why it exists
 
-ClauseGuard follows a strict layered architecture with a FastAPI backend and a dedicated Vue 3 + Bun frontend:
+Legal and procurement teams read the same ten clauses in every agreement, and a model that paraphrases confidently but wrongly is worse than no tool. ClauseGuard is built around one rule: **a model's output is a claim, and claims must be grounded.**
+
+| Principle | How it is enforced |
+|---|---|
+| Quotes must exist | A deterministic `CitationVerifier` checks each quote against retrieved chunks: exact substring first, then a RapidFuzz similarity threshold (default 0.80). The result is stored as a grounding flag next to the clause. |
+| Structured output must be valid | A repair loop validates model JSON against a Pydantic schema, re-prompts with the validation error, retries up to a bounded limit, and falls back to the second provider before returning a typed error. |
+| Contract text is untrusted | Prompts instruct the model to ignore commands inside excerpts, and the adversarial eval checks that injected instructions cannot pass citation verification. |
+| Providers fail | Retry with exponential backoff, a three-state circuit breaker, a token-bucket rate limiter and automatic Gemini-to-Groq failover. |
+| Public demos burn money | Per-IP quotas on the three endpoints that spend tokens, an optional shared API key, explicit CORS, and a production start-up guard. |
+
+## Features
+
+- **Ingestion pipeline.** PDF parse, section detection, overlap-aware chunking (512 tokens, 64 overlap), embedding and storage in Postgres. Uploads are SHA-256 deduplicated and processed asynchronously by Celery.
+- **Structured clause extraction.** Ten clause types (termination, liability cap, indemnity, auto-renewal, governing law, confidentiality, IP ownership, non-compete, force majeure, assignment), extracted in parallel with a concurrency cap. Each result carries a verbatim quote, page number, confidence and a grounding flag, plus latency, tokens and cost. Prompt templates are versioned (`v1`, `v2`) and selectable per request.
+- **Grounded Q&A over SSE.** Token-by-token streaming answers with citations resolved to source chunks and pages. When the contract doesn't say, the model is required to answer "not found in the document".
+- **Hybrid retrieval.** pgvector similarity and PostgreSQL full-text search fused with Reciprocal Rank Fusion (k = 60), with a clause-type filter and a token-budgeted context assembler.
+- **Observability.** Prometheus metrics (requests, latency, LLM calls, tokens, cost in USD, repair attempts, citation verification rate, circuit-breaker state), optional Langfuse tracing, and a per-run cost ledger.
+- **Review web app.** Vue 3 + TypeScript interface for the whole workflow (below).
+
+## Architecture
+
+```mermaid
+flowchart LR
+    UI["Vue 3 app<br/>(Vercel)"] -- "REST + SSE" --> API["FastAPI<br/>middleware: request-id, rate limit, quota, API key"]
+    API --> SVC["Services<br/>ingest / extract / query"]
+    SVC --> PIPE["Pipeline<br/>parse, sections, chunk,<br/>repair loop, citation verifier"]
+    SVC --> RET["Hybrid retrieval<br/>vector + FTS, RRF"]
+    SVC --> LLM["Resilient LLM client<br/>retry, breaker, limiter"]
+    LLM --> G["Gemini (primary)"]
+    LLM --> Q["Groq (fallback)"]
+    API -- "enqueue" --> W["Celery worker<br/>ingestion"]
+    W --> PIPE
+    RET --> DB[("PostgreSQL + pgvector<br/>(Neon)")]
+    PIPE --> DB
+    API --> R[("Redis<br/>broker, quota counters")]
+    API --> M["Prometheus / Langfuse"]
+```
+
+The backend is strictly layered: **routes** validate input and shape HTTP/SSE responses only; **services** hold business logic and orchestration; **repositories** (a generic `BaseRepository` on SQLAlchemy 2.0) own queries; **models** and **schemas** keep persistence and API contracts separate.
+
+### How a question is answered
 
 ```text
-clauseguard/
-├── app/                    # Layered FastAPI backend
-│   ├── api/v1/routes/        # Request validation (Pydantic), HTTP responses & SSE only
-│   ├── services/             # Pure business logic, AI orchestration, citation verification
-│   ├── repositories/         # SQLAlchemy 2.0 query layer extending BaseRepository
-│   ├── models/               # SQLAlchemy ORM (Mapped/mapped_column) with pgvector
-│   ├── pipeline/             # PDF parser, section detector, chunker, repair loop, citation verifier
-│   ├── retrieval/            # Hybrid search with Reciprocal Rank Fusion (RRF) & embeddings
-│   ├── llm/                  # Providers (Gemini & Groq), cost tracker, token pricing
-│   │   └── resilience/       # Exponential backoff, 3-state CircuitBreaker, token-bucket RateLimiter
-│   ├── observability/        # Prometheus metrics (/metrics), Langfuse v4 tracing, run ledger
-│   └── workers/              # Celery background tasks for async document ingestion
-├── frontend/               # Dedicated Vue 3 + Bun + TypeScript frontend
-│   ├── src/
-│   │   ├── components/       # DocumentUpload, ExtractionView, ClauseCard, QuestionView, Citations
-│   │   ├── views/            # DashboardView, UploadView, ExtractionsView, AskView
-│   │   ├── composables/      # useDocument, useExtraction, useAskStream, useHealth
-│   │   ├── services/         # Typed API & SSE streaming client
-│   │   ├── types/            # TypeScript schemas matching FastAPI contracts
-│   │   ├── router/           # Vue Router 4 navigation
-│   │   └── assets/           # Obsidian dark mode design system & styles
-│   ├── bun.lock              # Bun lockfile
-│   └── vite.config.ts        # Vite configuration with backend proxy
-├── eval/                     # CUAD golden samples & hallucination eval harness
-├── migrations/               # Alembic versioned database migrations
-└── tests/                    # Comprehensive unit tests
+question -> embed -> vector search ┐
+                                   ├─ RRF fusion -> context (token budget) -> LLM (streamed)
+            full-text search ──────┘                                              │
+                                                                                  v
+                            citation verifier (quote must exist in a source chunk) -> SSE events
 ```
 
----
+## Quickstart (local)
 
-## API Endpoints
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/v1/health` | Health check & active FreeLLM provider status |
-| `POST` | `/api/v1/documents` | Upload contract PDF for asynchronous parsing, chunking & vector embedding |
-| `GET` | `/api/v1/documents/{id}` | Check ingestion status and total parsed chunk count |
-| `POST` | `/api/v1/extract` | Structured clause extraction (parallelized with concurrency cap & repair loop) |
-| `GET` | `/api/v1/extractions/{id}` | Fetch historical extraction results with verified citations |
-| `POST` | `/api/v1/ask` | Grounded contract Q&A streaming via Server-Sent Events (SSE) with verified citations |
-| `GET` | `/metrics` | Prometheus metrics scrape endpoint |
-
----
-
-## Frontend Web Application
-
-ClauseGuard includes a clean, production-grade web application in [`frontend/`](file:///Users/ztlab121/Desktop/apps/generative_ai/clauseguard/frontend) built with **Vue 3**, **Bun.js**, and **TypeScript**:
-
-- **Contract Ingestion Dropzone**:
-  - PDF drag-and-drop with client-side 50MB and format validation.
-  - Live ingestion pipeline stage tracking (`Upload` ➔ `Parsing & Sections` ➔ `Vector Chunks`).
-  - SHA-256 deduplication and local persistence of recent contracts.
-- **Structured Clause Extraction**:
-  - Interactive selector chips for all 10 standard clauses with prompt template versioning (`v2` vs `v1`).
-  - Grounding tags, confidence score meters, verbatim citations, and self-healing repair loop indicators.
-  - Performance telemetry strip (latency, token usage, cost in $USD).
-- **Grounded Q&A (SSE Streaming)**:
-  - Token-by-token Server-Sent Events (SSE) streaming answers with real-time Markdown rendering.
-  - Grounded citation cards linking quotes to verified source chunks and page numbers.
-  - Suggested prompt shortcuts for rapid clause auditing.
-- **System Health & Observability**:
-  - Live backend connectivity and dual-provider failover status (Gemini Flash Lite & Groq).
-
----
-
-## Quickstart & Local Development
-
-### 1. Environment Configuration
-
-Clone the repository and copy the environment template:
+Requirements: Python 3.12, Docker, Bun.
 
 ```bash
-cp .env.example .env
+cp .env.example .env              # set POSTGRES_PASSWORD (letters and digits only) and GEMINI_API_KEY / GROQ_API_KEY
+make db-up                        # Postgres (pgvector) on :5434 and Redis on :6379
+make migrate                      # Alembic migrations
+make server                       # API on http://localhost:8000  (docs at /docs)
+make worker                       # Celery ingestion worker (solo pool, macOS-safe), in another terminal
+make frontend-install && make frontend    # web app on http://localhost:5173
 ```
 
-Ensure your `.env` contains your `GEMINI_API_KEY` and database credentials:
+Free API keys: Gemini at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey), Groq at [console.groq.com/keys](https://console.groq.com/keys). Langfuse (`LANGFUSE_*`) is optional.
 
-```env
-DATABASE_URL=postgresql+asyncpg://clauseguard:clauseguard_secret@localhost:5433/clauseguard
-DATABASE_SYNC_URL=postgresql+psycopg2://clauseguard:clauseguard_secret@localhost:5433/clauseguard
-REDIS_URL=redis://localhost:6379/0
-GEMINI_API_KEY=your_gemini_api_key_here
-GEMINI_MODEL_ID=gemini-flash-lite-latest
-GROQ_API_KEY=your_groq_api_key_here
-GROQ_MODEL_ID=openai/gpt-oss-120b
-```
-
-### 2. Start PostgreSQL & Redis
-
-Start the containerized `pgvector` database and Redis broker:
+To run everything in containers, including Postgres and Redis:
 
 ```bash
-make db-up
-# Alternatively: docker compose up -d postgres redis
+docker compose up --build         # api :8000, celery-worker, postgres :5434, redis :6379
 ```
 
-Run database migrations:
+`docker-compose.override.yml` adds hot reload and is applied automatically; use `docker compose -f docker-compose.yml up` to skip it. The API start script also runs an embedded Celery worker by default (`RUN_EMBEDDED_WORKER=true`), so set it to `false` if you run the dedicated `celery-worker` service.
 
-```bash
-make migrate
-# Alternatively: .venv/bin/alembic upgrade head
-```
-
-### 3. Start the Celery Worker
-
-In a dedicated terminal tab, start the Celery worker for background ingestion:
-
-```bash
-make worker
-# Alternatively: .venv/bin/celery -A app.workers.celery_app worker --loglevel=info --pool=solo
-```
-
-> **Note for macOS / Apple Silicon:** The worker is configured with `--pool=solo` to prevent billiard multiprocessing spawn incompatibilities on macOS.
-
-### 4. Start the FastAPI API Server
-
-In another terminal tab, start the Uvicorn development server:
-
-```bash
-make server
-# Alternatively: .venv/bin/uvicorn app.main:app --port 8000 --reload
-```
-
-Interactive Swagger documentation is available at: **`http://localhost:8000/docs`**
-
-### 5. Start the Vue 3 Frontend
-
-In a dedicated terminal tab, install dependencies and start the frontend development server:
-
-```bash
-make frontend-install
-make frontend
-# Alternatively: cd frontend && bun install && bun run dev
-```
-
-The web interface is available at: **`http://localhost:5173`**
-
----
-
-## Developer Command Reference (`Makefile`)
+### Commands
 
 | Command | Action |
 |---|---|
-| `make db-up` | Starts Postgres (with pgvector) and Redis containers |
-| `make db-down` | Stops and removes local Docker containers |
-| `make migrate` | Applies pending Alembic database migrations |
-| `make migrate-check` | Displays current migration revision |
-| `make server` | Starts Uvicorn development server on port `8000` |
-| `make worker` | Starts Celery ingestion worker (solo pool) |
-| `make frontend-install` | Installs frontend dependencies with Bun |
-| `make frontend` | Starts Vite development server for Vue frontend on port `5173` |
-| `make frontend-build` | Type-checks (`vue-tsc`) and builds production frontend bundle |
-| `make test` | Runs the entire unit test and eval suite |
+| `make db-up` / `make db-down` | Start / stop Postgres and Redis |
+| `make migrate` / `make migrate-check` | Apply migrations / show current revision |
+| `make server` | Uvicorn dev server on `:8000` |
+| `make worker` | Celery ingestion worker |
+| `make frontend-install` / `make frontend` / `make frontend-build` | Install, run, or type-check and build the web app |
+| `make test` | Unit tests plus the evaluation harness |
 
----
+### Configuration highlights
 
-## Full Stack Docker Compose
+| Variable | Default | Purpose |
+|---|---|---|
+| `GEMINI_MODEL_ID` / `GROQ_MODEL_ID` | `gemini-flash-lite-latest` / `openai/gpt-oss-120b` | Primary and fallback models |
+| `API_KEY` | empty (off) | Shared key required on `/api/v1` routes except `/health` |
+| `CORS_ORIGINS` | `http://localhost:5173,http://localhost:5174` | Allowed browser origins |
+| `TRUSTED_PROXY_HOPS` | `0` | Reverse-proxy hops to trust for client IP |
+| `QUOTA_UPLOADS` / `QUOTA_EXTRACTIONS` / `QUOTA_QUESTIONS` | `5` / `10` / `40` | Per-IP limits per `QUOTA_WINDOW_S` (3600 s) |
+| `MAX_REPAIR_ATTEMPTS` | `2` | Structured-output repair retries |
+| `CITATION_SIMILARITY_THRESHOLD` | `0.80` | Minimum fuzzy match for a quote to count as grounded |
+| `EXTRACTION_CONCURRENCY_CAP` | `4` | Parallel clause extractions |
+| `RETRIEVAL_TOP_K` / `CONTEXT_TOKEN_BUDGET` | `5` / `6000` | Retrieval size and prompt budget |
+| `ENABLE_METRICS` | `true` | Expose `/metrics` |
 
-To boot all services (API, Celery Worker, Postgres, Redis, Prometheus) in containers:
+The full list is in `.env.example` and `app/core/config.py`.
 
-```bash
-docker compose up --build -d
-```
-
-- **API Server:** `http://localhost:8000`
-- **Prometheus Dashboard:** `http://localhost:9090`
-- **Postgres (pgvector):** `localhost:5432` *(in Docker network)*
-- **Redis Broker:** `localhost:6379`
-
----
-
-## Running Tests & Evaluation Harness
-
-ClauseGuard includes an automated evaluation suite testing extraction recall, citation groundedness, and prompt injection defense against golden CUAD contract samples:
+## Testing and evaluation
 
 ```bash
-make test
-# or: pytest tests/ eval/ -v
+make test        # pytest tests/ eval/ -v   (26 tests)
 ```
+
+- **Unit tests** cover the chunker, citation verifier, repair loop, resilience primitives (retry, circuit breaker, rate limiter), routes, retrieval and services, and the security and quota behaviour.
+- **Evaluation harness** (`eval/`) runs section-detection recall and citation groundedness against golden contract text, plus an adversarial prompt-injection case. The golden set is currently a single annotated sample (`eval/golden/cuad_samples.json`), shaped after CUAD; it is a regression guard, not a benchmark.
+- `k6-script.sample.ts` is a load-test starting point, and `clauseGuardAPI.ts` is a generated TypeScript client for the API.
+
+## Deployment
+
+Designed for a free-tier stack: **Vercel** (static frontend) + **Render** (API container, `render.yaml` blueprint) + **Neon** (Postgres with pgvector) + Render Key Value (Redis). The API container applies migrations on every start. The step-by-step runbook, CORS wiring, quota verification behind a proxy, and a cost note are in [`DEPLOYMENT.md`](DEPLOYMENT.md).
+
+## Project layout
+
+```text
+clauseguard/
+├── app/
+│   ├── api/v1/routes/      # HTTP and SSE only
+│   ├── services/           # ingest, extraction and query orchestration
+│   ├── repositories/       # SQLAlchemy 2.0 query layer (BaseRepository)
+│   ├── models/ schemas/    # ORM models (pgvector) and Pydantic contracts
+│   ├── pipeline/           # pdf parser, section detector, chunker, repair loop, citation verifier
+│   ├── retrieval/          # embeddings, hybrid search (RRF), context assembler
+│   ├── llm/                # Gemini and Groq providers, cost tracking
+│   │   └── resilience/     # retry, circuit breaker, rate limiter, resilient client
+│   ├── middleware/         # request id, rate limit, per-IP quota
+│   ├── observability/      # Prometheus metrics, Langfuse
+│   ├── prompts/            # versioned prompt templates
+│   ├── workers/            # Celery app and ingestion task
+│   └── core/               # config, security, constants, errors
+├── frontend/               # Vue 3 + TypeScript app (Bun, Vite, TanStack Query)
+├── eval/                   # golden data and evaluation harness
+├── migrations/             # Alembic
+├── tests/                  # unit tests
+├── scripts/                # container entrypoints (migrate, worker, API)
+├── Dockerfile  docker-compose.yml  render.yaml  DEPLOYMENT.md
+└── Makefile
+```
+
+## Design notes and known limitations
+
+I'd rather state these than have a reviewer find them.
+
+- **Embeddings are a deterministic hash-based projection**, not a learned model. It keeps local development free and reproducible, and the tests deterministic, but retrieval quality is lexical-leaning and weaker than a real embedding model. The `EmbeddingClient` interface is the single place to swap in a hosted or local model; the vector column is 384-dimensional.
+- **The evaluation set is small** (one annotated contract). Recall and groundedness numbers from it are smoke tests. Growing it with real CUAD contracts and tracking extraction F1 over time is the next step.
+- **Section detection is rule-based** (heading regexes plus a keyword map). It works on conventionally formatted agreements and will miss unusual layouts.
+- **Citation grounding is textual.** It proves a quote exists in the source, not that the model interpreted it correctly.
+- **Quotas are per IP** and depend on `TRUSTED_PROXY_HOPS` matching the real proxy chain; `DEPLOYMENT.md` explains how to verify it.
+
+## Tech stack
+
+Python 3.12 · FastAPI · SQLAlchemy 2.0 (async) · Alembic · PostgreSQL + pgvector · Redis · Celery · Pydantic v2 · pypdf · RapidFuzz · tiktoken · Prometheus · Langfuse · Docker · Vue 3 · TypeScript · Vite · Bun · TanStack Query · pytest
