@@ -1,0 +1,15 @@
+.venv
+.git
+.env
+.env.*
+!.env.example
+**/__pycache__
+*.pyc
+.pytest_cache
+frontend
+eval
+tests
+docs
+*.md
+k6-script.sample.ts
+clauseGuardAPI.ts

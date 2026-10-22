@@ -1,40 +1,37 @@
 FROM python:3.12-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
 WORKDIR /app
 
-# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency definition
+# Install dependencies straight from pyproject.toml (single source of truth) so this layer
+# stays cached until dependencies actually change.
 COPY pyproject.toml .
+RUN python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']))" > /tmp/requirements.txt \
+    && pip install --upgrade pip \
+    && pip install -r /tmp/requirements.txt
 
-# Install dependencies using pip
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir \
-    "fastapi[standard]>=0.115.0" \
-    "pydantic>=2.9.0" \
-    "pydantic-settings>=2.5.0" \
-    "sqlalchemy>=2.0.30" \
-    "pgvector>=0.3.0" \
-    "asyncpg>=0.29.0" \
-    "psycopg2-binary>=2.9.9" \
-    "httpx>=0.27.0" \
-    "pypdf>=4.3.0" \
-    "redis>=5.0.8" \
-    "celery>=5.4.0" \
-    "prometheus-client>=0.20.0" \
-    "rapidfuzz>=3.9.0" \
-    "alembic>=1.13.2" \
-    "tiktoken>=0.7.0" \
-    "langfuse>=2.0.0"
+COPY app ./app
+COPY migrations ./migrations
+COPY alembic.ini .
+COPY scripts ./scripts
+RUN chmod +x scripts/*.sh
 
-# Copy application source code
-COPY . .
+# Run as an unprivileged user.
+RUN useradd --system --uid 10001 --no-create-home appuser
+USER appuser
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS "http://127.0.0.1:${PORT:-8000}/api/v1/health" || exit 1
+
+CMD ["./scripts/start-api.sh"]

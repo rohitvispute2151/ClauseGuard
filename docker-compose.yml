@@ -1,37 +1,37 @@
+# Production-like local stack. Secrets come from the environment (.env), never from this file.
+#   cp .env.example .env   # then set POSTGRES_PASSWORD, API keys, ...
+#   docker compose up --build
+# For hot-reload development, docker-compose.override.yml is applied automatically.
+x-app-env: &app-env
+  env_file: [.env]
+  environment:
+    DATABASE_URL: postgresql+asyncpg://clauseguard:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/clauseguard
+    DATABASE_SYNC_URL: postgresql+psycopg2://clauseguard:${POSTGRES_PASSWORD}@postgres:5432/clauseguard
+    REDIS_URL: redis://redis:6379/0
+
 services:
   api:
     build: .
-    container_name: clauseguard_api
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    <<: *app-env
     ports:
       - "8000:8000"
-    env_file:
-      - .env
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://clauseguard:clauseguard_secret@postgres:5432/clauseguard
-      - DATABASE_SYNC_URL=postgresql+psycopg2://clauseguard:clauseguard_secret@postgres:5432/clauseguard
-      - REDIS_URL=redis://redis:6379/0
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
+    restart: unless-stopped
 
   celery-worker:
     build: .
-    container_name: clauseguard_celery
-    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
-    env_file:
-      - .env
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://clauseguard:clauseguard_secret@postgres:5432/clauseguard
-      - DATABASE_SYNC_URL=postgresql+psycopg2://clauseguard:clauseguard_secret@postgres:5432/clauseguard
-      - REDIS_URL=redis://redis:6379/0
+    <<: *app-env
+    command: ["./scripts/start-worker.sh"]
     depends_on:
       postgres:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
+    restart: unless-stopped
 
   postgres:
     image: pgvector/pgvector:pg16
@@ -39,35 +39,29 @@ services:
     environment:
       POSTGRES_DB: clauseguard
       POSTGRES_USER: clauseguard
-      POSTGRES_PASSWORD: clauseguard_secret
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     ports:
-      - "5434:5432"
+      - "127.0.0.1:5434:5432"   # loopback only; 5432/5433 are commonly taken by other local databases
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U clauseguard -d clauseguard"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     container_name: clauseguard_redis
     ports:
-      - "6379:6379"
-    volumes:
-      - redisdata:/data
-
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: clauseguard_prometheus
-    ports:
-      - "9090:9090"
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-    volumes:
-      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
 
 volumes:
   pgdata:
-  redisdata:
