@@ -1,0 +1,51 @@
+# Render Blueprint: API + Celery worker + Redis. Postgres (pgvector) lives on Neon.
+# Deploy: Render dashboard -> New -> Blueprint -> select this repo. Fill the `sync: false` secrets when prompted.
+services:
+  - type: web
+    name: clauseguard-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter
+    healthCheckPath: /api/v1/health
+    envVars: &shared-env
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL          # postgresql+asyncpg://USER:PASS@HOST/DB?ssl=require
+        sync: false
+      - key: DATABASE_SYNC_URL     # postgresql+psycopg2://USER:PASS@HOST/DB?sslmode=require
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: clauseguard-redis
+          property: connectionString
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: LANGFUSE_PUBLIC_KEY
+        sync: false
+      - key: LANGFUSE_SECRET_KEY
+        sync: false
+      - key: ENABLE_METRICS
+        value: "false"
+      - key: CORS_ORIGINS          # e.g. https://clauseguard.vercel.app
+        sync: false
+      - key: API_KEY               # optional: must match VITE_API_KEY on the frontend
+        sync: false
+      - key: TRUSTED_PROXY_HOPS
+        value: "1"
+
+  - type: worker
+    name: clauseguard-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: ./scripts/start-worker.sh
+    plan: starter
+    envVars: *shared-env
+
+  - type: keyvalue
+    name: clauseguard-redis
+    plan: free
+    ipAllowList: []          # internal connections only
+    maxmemoryPolicy: noeviction   # Celery's broker must never evict queued jobs

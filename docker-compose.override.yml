@@ -1,0 +1,7 @@
+# Development overrides, merged automatically by `docker compose`.
+# Skip with: docker compose -f docker-compose.yml up
+services:
+  api:
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./app:/app/app

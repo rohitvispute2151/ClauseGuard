@@ -1,4 +1,12 @@
-export const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '/api/v1';
+// Dev: relative path, proxied by Vite. Production: full URL of the deployed API, e.g. https://api.example.com/api/v1
+export const API_BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api/v1').replace(/\/+$/, '');
+
+// Optional shared key. Anything in a browser bundle is public, so this only deters casual scripts.
+const API_KEY = import.meta.env.VITE_API_KEY as string | undefined;
+
+export function baseHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return API_KEY ? { ...extra, 'X-API-Key': API_KEY } : extra;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -62,7 +70,7 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
   try {
     res = await fetch(`${API_BASE}${path}`, {
       method,
-      headers: json !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      headers: baseHeaders(json !== undefined ? { 'Content-Type': 'application/json' } : {}),
       body: json !== undefined ? JSON.stringify(json) : body,
       signal: AbortSignal.any(signals),
     });

@@ -6,7 +6,7 @@ import type {
   ExtractionResponse,
   HealthStatus,
 } from '@/types/api';
-import { API_BASE, ApiError, request, toApiError, toNetworkError } from './client';
+import { API_BASE, ApiError, baseHeaders, request, toApiError, toNetworkError } from './client';
 import { parseSSE } from './sse';
 
 export const api = {
@@ -43,7 +43,7 @@ export async function* streamAnswer(
   try {
     res = await fetch(`${API_BASE}/ask`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: baseHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ document_id: documentId, question: question.trim() }),
       signal,
     });

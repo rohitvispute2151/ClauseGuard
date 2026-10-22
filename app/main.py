@@ -7,6 +7,7 @@ from prometheus_client import make_asgi_app
 from app.api.v1.router import v1_router
 from app.core.config import settings
 from app.core.redis import close_redis_client
+from app.middleware.quota import QuotaMiddleware
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIDMiddleware
 
@@ -35,16 +36,19 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Register Middlewares
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Register middlewares. Starlette runs the LAST one added first, so CORS goes last (outermost):
+# that way 401/429 responses produced by the layers below still carry CORS headers.
+app.add_middleware(QuotaMiddleware)
 app.add_middleware(RateLimitMiddleware)
 app.add_middleware(RequestIDMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins_list,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-API-Key", "X-Request-ID"],
+    expose_headers=["Retry-After", "X-Request-ID"],
+)
 
 # Mount Routes
 app.include_router(v1_router)
