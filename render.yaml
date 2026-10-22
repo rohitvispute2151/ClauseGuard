@@ -36,14 +36,6 @@ services:
       - key: TRUSTED_PROXY_HOPS
         value: "1"
 
-  - type: worker
-    name: clauseguard-worker
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    dockerCommand: ./scripts/start-worker.sh
-    plan: starter
-    envVars: *shared-env
-
   - type: keyvalue
     name: clauseguard-redis
     plan: free

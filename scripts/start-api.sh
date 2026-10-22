@@ -9,7 +9,7 @@ set -euo pipefail
 echo "[start] applying database migrations"
 alembic upgrade head
 
-if [ "${RUN_EMBEDDED_WORKER:-false}" = "true" ]; then
+if [ "${RUN_EMBEDDED_WORKER:-true}" = "true" ]; then
   echo "[start] launching embedded celery worker"
   celery -A app.workers.celery_app worker --loglevel=info --pool=solo &
 fi
