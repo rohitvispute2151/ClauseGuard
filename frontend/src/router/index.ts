@@ -1,33 +1,29 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import DashboardView from '../views/DashboardView.vue';
-import UploadView from '../views/UploadView.vue';
-import ExtractionsView from '../views/ExtractionsView.vue';
-import AskView from '../views/AskView.vue';
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
+  scrollBehavior: () => ({ top: 0 }),
   routes: [
+    { path: '/', name: 'library', component: () => import('@/views/LibraryView.vue'), meta: { title: 'Documents' } },
     {
-      path: '/',
-      name: 'dashboard',
-      component: DashboardView
+      path: '/documents/:id',
+      component: () => import('@/views/WorkspaceView.vue'),
+      props: true,
+      children: [
+        { path: '', redirect: (to) => `/documents/${to.params.id}/review` },
+        { path: 'review', name: 'review', component: () => import('@/views/ReviewView.vue'), props: true, meta: { title: 'Clause review' } },
+        { path: 'ask', name: 'ask', component: () => import('@/views/AskView.vue'), props: true, meta: { title: 'Ask' } },
+      ],
     },
-    {
-      path: '/upload',
-      name: 'upload',
-      component: UploadView
-    },
-    {
-      path: '/extractions',
-      name: 'extractions',
-      component: ExtractionsView
-    },
-    {
-      path: '/ask',
-      name: 'ask',
-      component: AskView
-    }
-  ]
+    { path: '/upload', redirect: '/' },
+    { path: '/extractions', redirect: '/' },
+    { path: '/ask', redirect: '/' },
+    { path: '/:pathMatch(.*)*', redirect: '/' },
+  ],
+});
+
+router.afterEach((to) => {
+  document.title = to.meta.title ? `${to.meta.title} · ClauseGuard` : 'ClauseGuard';
 });
 
 export default router;
