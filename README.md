@@ -33,23 +33,6 @@ Legal and procurement teams read the same ten clauses in every agreement, and a 
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    UI["Vue 3 app<br/>(Vercel)"] -- "REST + SSE" --> API["FastAPI<br/>middleware: request-id, rate limit, quota, API key"]
-    API --> SVC["Services<br/>ingest / extract / query"]
-    SVC --> PIPE["Pipeline<br/>parse, sections, chunk,<br/>repair loop, citation verifier"]
-    SVC --> RET["Hybrid retrieval<br/>vector + FTS, RRF"]
-    SVC --> LLM["Resilient LLM client<br/>retry, breaker, limiter"]
-    LLM --> G["Gemini (primary)"]
-    LLM --> Q["Groq (fallback)"]
-    API -- "enqueue" --> W["Celery worker<br/>ingestion"]
-    W --> PIPE
-    RET --> DB[("PostgreSQL + pgvector<br/>(Neon)")]
-    PIPE --> DB
-    API --> R[("Redis<br/>broker, quota counters")]
-    API --> M["Prometheus / Langfuse"]
-```
-
 The backend is strictly layered: **routes** validate input and shape HTTP/SSE responses only; **services** hold business logic and orchestration; **repositories** (a generic `BaseRepository` on SQLAlchemy 2.0) own queries; **models** and **schemas** keep persistence and API contracts separate.
 
 ### How a question is answered
@@ -126,43 +109,6 @@ make test        # pytest tests/ eval/ -v   (26 tests)
 ## Deployment
 
 Designed for a free-tier stack: **Vercel** (static frontend) + **Render** (API container, `render.yaml` blueprint) + **Neon** (Postgres with pgvector) + Render Key Value (Redis). The API container applies migrations on every start. The step-by-step runbook, CORS wiring, quota verification behind a proxy, and a cost note are in [`DEPLOYMENT.md`](DEPLOYMENT.md).
-
-## Project layout
-
-```text
-clauseguard/
-├── app/
-│   ├── api/v1/routes/      # HTTP and SSE only
-│   ├── services/           # ingest, extraction and query orchestration
-│   ├── repositories/       # SQLAlchemy 2.0 query layer (BaseRepository)
-│   ├── models/ schemas/    # ORM models (pgvector) and Pydantic contracts
-│   ├── pipeline/           # pdf parser, section detector, chunker, repair loop, citation verifier
-│   ├── retrieval/          # embeddings, hybrid search (RRF), context assembler
-│   ├── llm/                # Gemini and Groq providers, cost tracking
-│   │   └── resilience/     # retry, circuit breaker, rate limiter, resilient client
-│   ├── middleware/         # request id, rate limit, per-IP quota
-│   ├── observability/      # Prometheus metrics, Langfuse
-│   ├── prompts/            # versioned prompt templates
-│   ├── workers/            # Celery app and ingestion task
-│   └── core/               # config, security, constants, errors
-├── frontend/               # Vue 3 + TypeScript app (Bun, Vite, TanStack Query)
-├── eval/                   # golden data and evaluation harness
-├── migrations/             # Alembic
-├── tests/                  # unit tests
-├── scripts/                # container entrypoints (migrate, worker, API)
-├── Dockerfile  docker-compose.yml  render.yaml  DEPLOYMENT.md
-└── Makefile
-```
-
-## Design notes and known limitations
-
-I'd rather state these than have a reviewer find them.
-
-- **Embeddings are a deterministic hash-based projection**, not a learned model. It keeps local development free and reproducible, and the tests deterministic, but retrieval quality is lexical-leaning and weaker than a real embedding model. The `EmbeddingClient` interface is the single place to swap in a hosted or local model; the vector column is 384-dimensional.
-- **The evaluation set is small** (one annotated contract). Recall and groundedness numbers from it are smoke tests. Growing it with real CUAD contracts and tracking extraction F1 over time is the next step.
-- **Section detection is rule-based** (heading regexes plus a keyword map). It works on conventionally formatted agreements and will miss unusual layouts.
-- **Citation grounding is textual.** It proves a quote exists in the source, not that the model interpreted it correctly.
-- **Quotas are per IP** and depend on `TRUSTED_PROXY_HOPS` matching the real proxy chain; `DEPLOYMENT.md` explains how to verify it.
 
 ## Tech stack
 
